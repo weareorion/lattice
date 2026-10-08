@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Lattice</title>
+  <link rel="stylesheet" href="css/panel.css" />
+</head>
+<body>
+  <header>
+    <h1>Lattice</h1>
+    <p class="subtitle">Reveal the construction grid of the selected logo.</p>
+  </header>
+
+  <section id="status" class="status"></section>
+
+  <form id="options-form">
+    <fieldset>
+      <legend>Layers</legend>
+
+      <label class="row">
+        <input type="checkbox" id="layer-anchors" checked />
+        Anchors
+        <input type="color" id="color-anchors" value="#ff3b30" title="Anchor color" />
+        <input type="number" id="size-anchors" min="1" max="40" value="4" title="Anchor size (pt)" />
+      </label>
+
+      <label class="row">
+        <input type="checkbox" id="layer-handles" checked />
+        Handles
+        <input type="color" id="color-handles" value="#34c759" title="Handle color" />
+        <input type="number" id="size-handles" min="1" max="20" value="2" title="Handle dot size (pt)" />
+      </label>
+
+      <label class="row">
+        <input type="checkbox" id="layer-outline" checked />
+        Outline
+        <input type="color" id="color-outline" value="#007aff" title="Outline color" />
+      </label>
+
+      <label class="row">
+        <input type="checkbox" id="layer-alignments" checked />
+        Alignments
+        <input type="color" id="color-alignments" value="#ffcc00" title="Alignment color" />
+      </label>
+
+      <label class="row">
+        <input type="checkbox" id="layer-edges" checked />
+        Edges
+        <input type="color" id="color-edges" value="#af52de" title="Edge color" />
+      </label>
+
+      <label class="row">
+        Line weight
+        <input type="number" id="line-weight" min="0.25" max="10" step="0.25" value="0.5" />
+      </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Sensitivity</legend>
+
+      <label class="row">
+        Angle tolerance (deg)
+        <input type="number" id="angle-tolerance" min="0" max="15" step="0.5" value="1" />
+      </label>
+
+      <label class="row">
+        Coordinate tolerance (pt)
+        <input type="number" id="coord-tolerance" min="0" max="20" step="0.5" value="1" />
+      </label>
+
+      <label class="row">
+        Minimum edge length (pt)
+        <input type="number" id="min-edge-length" min="0" max="200" step="1" value="4" />
+      </label>
+
+      <label class="row">
+        <input type="checkbox" id="high-sensitivity" />
+        Include repeated diagonals (high sensitivity)
+      </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Scope</legend>
+
+      <label class="row">
+        <select id="scope-mode">
+          <option value="artboard">Active artboard</option>
+          <option value="selection" selected>Selection bounds + margin</option>
+        </select>
+      </label>
+
+      <label class="row">
+        Margin (pt)
+        <input type="number" id="scope-margin" min="0" max="500" step="1" value="40" />
+      </label>
+    </fieldset>
+  </form>
+
+  <div class="actions">
+    <button id="btn-generate" type="button">Generate</button>
+    <button id="btn-clear" type="button" class="secondary">Clear</button>
+  </div>
+
+  <section id="report" class="report" hidden>
+    <h2>Report</h2>
+    <pre id="report-body"></pre>
+  </section>
+
+  <script src="js/CSInterface.js"></script>
+  <script src="js/main.js"></script>
+</body>
+</html>
