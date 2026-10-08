@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  CEP extension manifest for Lattice.
+
+  Install path (copy the whole repo folder, keeping this relative layout):
+    Windows: %APPDATA%\Adobe\CEP\extensions\Lattice
+    macOS:   ~/Library/Application Support/Adobe/CEP/extensions/Lattice
+
+  Unsigned extensions also require PlayerDebugMode=1 (see README.md).
+-->
+<ExtensionManifest Version="9.0" ExtensionBundleId="com.lattice.extension"
+                    ExtensionBundleVersion="0.1.0"
+                    ExtensionBundleName="Lattice">
+  <ExtensionList>
+    <Extension Id="com.lattice.panel" Version="0.1.0" />
+  </ExtensionList>
+  <ExecutionEnvironment>
+    <HostList>
+      <!-- ILST = Illustrator. Range covers the 2021-2026 versions targeted by the plan. -->
+      <Host Name="ILST" Version="[25.0,99.0]" />
+    </HostList>
+    <LocaleList>
+      <Locale Code="All" />
+    </LocaleList>
+    <RequiredRuntimeList>
+      <RequiredRuntime Name="CSXS" Version="9.0" />
+    </RequiredRuntimeList>
+  </ExecutionEnvironment>
+  <DispatchInfoList>
+    <Extension Id="com.lattice.panel">
+      <DispatchInfo>
+        <Resources>
+          <MainPath>./client/index.html</MainPath>
+          <CEFCommandLine>
+            <Parameter>--enable-nodejs</Parameter>
+            <Parameter>--mixed-context</Parameter>
+          </CEFCommandLine>
+        </Resources>
+        <Lifecycle>
+          <AutoVisible>true</AutoVisible>
+        </Lifecycle>
+        <UI>
+          <Type>Panel</Type>
+          <Menu>Lattice</Menu>
+          <Geometry>
+            <Size>
+              <Height>640</Height>
+              <Width>320</Width>
+            </Size>
+            <MinSize>
+              <Height>420</Height>
+              <Width>280</Width>
+            </MinSize>
+          </Geometry>
+        </UI>
+      </DispatchInfo>
+    </Extension>
+  </DispatchInfoList>
+</ExtensionManifest>
