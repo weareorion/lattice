@@ -6,8 +6,8 @@
 //   npm test
 //
 // Covers the tier-1 engine plus tier-2 circles (fit, ghost rejection,
-// in-path then cross-path merge). Diagonal alignment grouping is still
-// not implemented — see the `gridlines-angles` todo.
+// in-path then cross-path merge) and background grids. Diagonal alignment
+// grouping is still not implemented — see the `gridlines-angles` todo.
 
 var assert = require("assert");
 var geometry = require("../host/geometry.jsx");
@@ -367,6 +367,113 @@ test("filterCircles keeps every circle, the N longest arcs, or those under an er
   assert.strictEqual(longest[1].arcLength, 12);
   var under = geometry.filterCircles(circles, { mode: "error", maxError: 0.01 });
   assert.strictEqual(under.length, 2);
+});
+
+test("estimateModule finds the divisor of repeated gaps", function () {
+  approxEqual(geometry.estimateModule([0, 10, 20, 40], 0.5), 10);
+  approxEqual(geometry.estimateModule([0, 10, 25], 0.5), 5);
+  assert.strictEqual(geometry.estimateModule([0], 0.5), null);
+});
+
+test("measureModule uses alignment gaps and falls back to the short side", function () {
+  var bounds = { left: 0, top: 80, right: 40, bottom: 0 };
+  approxEqual(geometry.measureModule([0, 20, 40], [0, 20, 60], bounds, 0.5), 20);
+  approxEqual(geometry.measureModule([], [], bounds, 0.5), 5);
+});
+
+test("buildBackground square grid is spaced on the module and clipped to the bounds", function () {
+  var bounds = { left: 0, top: 100, right: 100, bottom: 0 };
+  var grid = geometry.buildBackground("square", bounds, 25, { x: 0, y: 0 });
+  assert.strictEqual(grid.lines.length, 10);
+  assert.strictEqual(grid.polygons.length, 0);
+  var i;
+  for (i = 0; i < grid.lines.length; i++) {
+    var ang = geometry.angleDeg(grid.lines[i].p1, grid.lines[i].p2);
+    assert.ok(
+      geometry.anglesClose(ang, 0, 0.01) || geometry.anglesClose(ang, 90, 0.01),
+      "expected an axis-aligned line, got " + ang
+    );
+  }
+});
+
+test("buildBackground isometric lines sit at 30, 90, and 150 degrees", function () {
+  var bounds = { left: 0, top: 100, right: 100, bottom: 0 };
+  var grid = geometry.buildBackground("isometric", bounds, 25, { x: 0, y: 0 });
+  var seen30 = false;
+  var seen90 = false;
+  var seen150 = false;
+  var i;
+  var ang;
+  assert.ok(grid.lines.length >= 3);
+  for (i = 0; i < grid.lines.length; i++) {
+    ang = geometry.angleDeg(grid.lines[i].p1, grid.lines[i].p2);
+    if (geometry.anglesClose(ang, 30, 0.05)) seen30 = true;
+    else if (geometry.anglesClose(ang, 90, 0.05)) seen90 = true;
+    else if (geometry.anglesClose(ang, 150, 0.05)) seen150 = true;
+    else assert.ok(false, "unexpected isometric angle " + ang);
+  }
+  assert.ok(seen30 && seen90 && seen150);
+});
+
+test("buildBackground hex polygons use the module as the side length", function () {
+  var bounds = { left: 0, top: 100, right: 100, bottom: 0 };
+  var grid = geometry.buildBackground("hex", bounds, 25, { x: 0, y: 0 });
+  assert.ok(grid.polygons.length >= 1);
+  assert.strictEqual(grid.lines.length, 0);
+  var poly = grid.polygons[0];
+  assert.strictEqual(poly.length, 6);
+  var cx = 0;
+  var cy = 0;
+  var k;
+  for (k = 0; k < poly.length; k++) {
+    cx += poly[k].x;
+    cy += poly[k].y;
+  }
+  cx /= poly.length;
+  cy /= poly.length;
+  approxEqual(geometry.distance({ x: cx, y: cy }, poly[0]), 25, 1e-6);
+});
+
+test("buildBackground golden grid spaces the two axes by phi", function () {
+  var bounds = { left: 0, top: 200, right: 200, bottom: 0 };
+  var moduleSize = 20;
+  var phi = (1 + Math.sqrt(5)) / 2;
+  var grid = geometry.buildBackground("golden", bounds, moduleSize, { x: 0, y: 0 });
+  var xs = [];
+  var ys = [];
+  var i;
+  var line;
+  var ang;
+  for (i = 0; i < grid.lines.length; i++) {
+    line = grid.lines[i];
+    ang = geometry.angleDeg(line.p1, line.p2);
+    if (geometry.anglesClose(ang, 90, 0.05)) {
+      xs.push((line.p1.x + line.p2.x) / 2);
+    } else if (geometry.anglesClose(ang, 0, 0.05)) {
+      ys.push((line.p1.y + line.p2.y) / 2);
+    }
+  }
+  xs.sort(function (a, b) {
+    return a - b;
+  });
+  ys.sort(function (a, b) {
+    return a - b;
+  });
+  assert.ok(xs.length >= 2 && ys.length >= 2);
+  approxEqual(ys[1] - ys[0], moduleSize, 1e-6);
+  approxEqual(xs[1] - xs[0], moduleSize * phi, 1e-4);
+});
+
+test("buildBackground flags a grid that would exceed the line cap", function () {
+  var grid = geometry.buildBackground(
+    "square",
+    { left: 0, top: 0, right: 10000, bottom: 10000 },
+    0.01,
+    { x: 0, y: 0 }
+  );
+  assert.strictEqual(grid.truncated, true);
+  assert.ok(grid.lines.length <= 600);
+  assert.ok(grid.lines.length > 0);
 });
 
 test("nearDuplicateAnchors flags two anchors closer than tolerance but not identical", function () {

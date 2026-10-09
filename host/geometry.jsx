@@ -344,6 +344,10 @@ Lattice.geometry = (function () {
   // tighter across paths — so a broken ellipse becomes one circle without
   // gluing neighboring marks together.
 
+  var PHI = (1 + Math.sqrt(5)) / 2;
+  var MAX_BACKGROUND_LINES = 600;
+  var MAX_BACKGROUND_POLYGONS = 800;
+
   function sampleCubic(p0, p1, p2, p3, segments) {
     var pts = [];
     var n = segments < 1 ? 1 : segments;
@@ -725,6 +729,309 @@ Lattice.geometry = (function () {
     return out;
   }
   api.filterCircles = filterCircles;
+
+  // ---- module + background grid (tier 2) ------------------------------------
+
+  function uniqueSorted(values, tolerance) {
+    var sorted = values.slice(0);
+    var out = [];
+    var i;
+    sorted.sort(function (a, b) {
+      return a - b;
+    });
+    for (i = 0; i < sorted.length; i++) {
+      if (out.length === 0 || Math.abs(sorted[i] - out[out.length - 1]) > tolerance) {
+        out.push(sorted[i]);
+      }
+    }
+    return out;
+  }
+
+  function approxGcd(a, b, tol) {
+    var rem;
+    var guard = 0;
+    var swap;
+    a = Math.abs(a);
+    b = Math.abs(b);
+    if (a < b) {
+      swap = a;
+      a = b;
+      b = swap;
+    }
+    while (b > tol && guard < 32) {
+      rem = a % b;
+      if (rem > b - tol) {
+        rem = 0;
+      }
+      a = b;
+      b = rem;
+      guard += 1;
+    }
+    return a;
+  }
+
+  // Largest spacing that tiles the sorted positions, within `tolerance`.
+  // Returns null when there is nothing repeated to measure.
+  function estimateModule(positions, tolerance) {
+    var uniq;
+    var gaps = [];
+    var i;
+    var gap;
+    var m;
+    if (!positions || positions.length < 2) {
+      return null;
+    }
+    uniq = uniqueSorted(positions, tolerance);
+    if (uniq.length < 2) {
+      return null;
+    }
+    for (i = 1; i < uniq.length; i++) {
+      gap = uniq[i] - uniq[i - 1];
+      if (gap > tolerance) {
+        gaps.push(gap);
+      }
+    }
+    if (gaps.length === 0) {
+      return null;
+    }
+    m = gaps[0];
+    for (i = 1; i < gaps.length; i++) {
+      m = approxGcd(m, gaps[i], tolerance);
+    }
+    if (!(m > tolerance)) {
+      return null;
+    }
+    return m;
+  }
+  api.estimateModule = estimateModule;
+
+  function fallbackModule(bounds) {
+    var w = 0;
+    var h = 0;
+    var side;
+    var m;
+    if (bounds) {
+      w = Math.abs(bounds.right - bounds.left);
+      h = Math.abs(bounds.top - bounds.bottom);
+    }
+    side = w < h ? w : h;
+    if (!(side > 0)) {
+      side = w > h ? w : h;
+    }
+    if (!(side > 0)) {
+      return 16;
+    }
+    m = side / 8;
+    if (m < 2) {
+      m = 2;
+    }
+    return m;
+  }
+
+  // xs / ys are alignment coordinates (repeated construction lines), not
+  // every anchor — stray curve points would collapse the divisor. When the
+  // mark has no repeated spacing, fall back to an eighth of the short side.
+  function measureModule(xs, ys, bounds, tolerance) {
+    var mx = estimateModule(xs || [], tolerance);
+    var my = estimateModule(ys || [], tolerance);
+    var moduleSize = null;
+    if (mx !== null && my !== null) {
+      moduleSize = approxGcd(mx, my, tolerance);
+      if (!(moduleSize > tolerance)) {
+        moduleSize = mx < my ? mx : my;
+      }
+    } else if (mx !== null) {
+      moduleSize = mx;
+    } else if (my !== null) {
+      moduleSize = my;
+    }
+    if (!(moduleSize >= 2)) {
+      moduleSize = fallbackModule(bounds);
+    }
+    return moduleSize;
+  }
+  api.measureModule = measureModule;
+
+  function pointOnRectBoundary(p, bounds, eps) {
+    var xMin = Math.min(bounds.left, bounds.right);
+    var xMax = Math.max(bounds.left, bounds.right);
+    var yMin = Math.min(bounds.top, bounds.bottom);
+    var yMax = Math.max(bounds.top, bounds.bottom);
+    var inX = p.x >= xMin - eps && p.x <= xMax + eps;
+    var inY = p.y >= yMin - eps && p.y <= yMax + eps;
+    var onV;
+    var onH;
+    if (!inX || !inY) {
+      return false;
+    }
+    onV = Math.abs(p.x - xMin) <= eps || Math.abs(p.x - xMax) <= eps;
+    onH = Math.abs(p.y - yMin) <= eps || Math.abs(p.y - yMax) <= eps;
+    return onV || onH;
+  }
+
+  // Parallel lines at `angleDeg`, spaced `spacing` apart perpendicular to
+  // the line, aligned so one line passes through `origin`. Each returned
+  // segment is clipped to `bounds`. `truncated` is set when the cap cuts
+  // the grid short (tiny module, huge artboard).
+  function parallelLines(bounds, angleDegValue, spacing, origin, limit) {
+    var rad = (angleDegValue * Math.PI) / 180;
+    var dx = Math.cos(rad);
+    var dy = Math.sin(rad);
+    var px = -Math.sin(rad);
+    var py = Math.cos(rad);
+    var corners = [
+      { x: Math.min(bounds.left, bounds.right), y: Math.min(bounds.top, bounds.bottom) },
+      { x: Math.max(bounds.left, bounds.right), y: Math.min(bounds.top, bounds.bottom) },
+      { x: Math.min(bounds.left, bounds.right), y: Math.max(bounds.top, bounds.bottom) },
+      { x: Math.max(bounds.left, bounds.right), y: Math.max(bounds.top, bounds.bottom) }
+    ];
+    var minO = Infinity;
+    var maxO = -Infinity;
+    var i;
+    var o;
+    var start;
+    var steps;
+    var truncated = false;
+    var lines = [];
+    var point;
+    var seg;
+    var eps = 1e-4;
+
+    function offset(p) {
+      return (p.x - origin.x) * px + (p.y - origin.y) * py;
+    }
+
+    if (!(spacing > 0)) {
+      return { lines: lines, truncated: false };
+    }
+    for (i = 0; i < corners.length; i++) {
+      o = offset(corners[i]);
+      if (o < minO) {
+        minO = o;
+      }
+      if (o > maxO) {
+        maxO = o;
+      }
+    }
+    start = Math.floor(minO / spacing) * spacing;
+    steps = Math.floor((maxO - start) / spacing + 1e-6);
+    if (steps < 0) {
+      steps = 0;
+    }
+    if (steps > limit) {
+      truncated = true;
+      steps = limit;
+    }
+    for (i = 0; i <= steps; i++) {
+      o = start + i * spacing;
+      point = { x: origin.x + px * o, y: origin.y + py * o };
+      seg = extendSegmentToBounds(point, { x: point.x + dx, y: point.y + dy }, bounds);
+      if (
+        pointOnRectBoundary(seg.p1, bounds, eps) &&
+        pointOnRectBoundary(seg.p2, bounds, eps) &&
+        distance(seg.p1, seg.p2) > 0.5
+      ) {
+        lines.push(seg);
+      }
+    }
+    return { lines: lines, truncated: truncated };
+  }
+
+  function hexagon(cx, cy, size) {
+    var pts = [];
+    var k;
+    var ang;
+    for (k = 0; k < 6; k++) {
+      ang = ((60 * k - 30) * Math.PI) / 180;
+      pts.push({ x: cx + size * Math.cos(ang), y: cy + size * Math.sin(ang) });
+    }
+    return pts;
+  }
+
+  function hexGrid(bounds, size, origin) {
+    var polygons = [];
+    var truncated = false;
+    var width = Math.sqrt(3) * size;
+    var vert = 1.5 * size;
+    var xMin = Math.min(bounds.left, bounds.right) - size;
+    var xMax = Math.max(bounds.left, bounds.right) + size;
+    var yMin = Math.min(bounds.top, bounds.bottom) - size;
+    var yMax = Math.max(bounds.top, bounds.bottom) + size;
+    var row0 = Math.floor((yMin - origin.y) / vert);
+    var row1 = Math.ceil((yMax - origin.y) / vert);
+    var r;
+    var c;
+    var cy;
+    var cx;
+    var rowOffset;
+    var col0;
+    var col1;
+
+    for (r = row0; r <= row1; r++) {
+      cy = origin.y + r * vert;
+      rowOffset = r % 2 !== 0 ? width / 2 : 0;
+      col0 = Math.floor((xMin - origin.x - rowOffset) / width);
+      col1 = Math.ceil((xMax - origin.x - rowOffset) / width);
+      for (c = col0; c <= col1; c++) {
+        if (polygons.length >= MAX_BACKGROUND_POLYGONS) {
+          return { polygons: polygons, truncated: true };
+        }
+        cx = origin.x + rowOffset + c * width;
+        polygons.push(hexagon(cx, cy, size));
+      }
+    }
+    return { polygons: polygons, truncated: truncated };
+  }
+
+  function appendLineSet(result, set) {
+    var i;
+    if (set.truncated) {
+      result.truncated = true;
+    }
+    for (i = 0; i < set.lines.length; i++) {
+      if (result.lines.length >= MAX_BACKGROUND_LINES) {
+        result.truncated = true;
+        return;
+      }
+      result.lines.push(set.lines[i]);
+    }
+  }
+
+  // type: "square" | "isometric" | "hex" | "golden"
+  // Square and isometric use `moduleSize` as the line spacing. Hex uses it
+  // as the side length (center to vertex). Golden tiles rectangles of
+  // width module*φ by height module.
+  function buildBackground(type, bounds, moduleSize, origin) {
+    var result = { lines: [], polygons: [], truncated: false };
+    var limit = MAX_BACKGROUND_LINES;
+    var hex;
+    if (!(moduleSize > 0) || !bounds) {
+      return result;
+    }
+    if (!origin) {
+      origin = {
+        x: Math.min(bounds.left, bounds.right),
+        y: Math.min(bounds.top, bounds.bottom)
+      };
+    }
+    if (type === "isometric") {
+      appendLineSet(result, parallelLines(bounds, 30, moduleSize, origin, limit));
+      appendLineSet(result, parallelLines(bounds, 90, moduleSize, origin, limit));
+      appendLineSet(result, parallelLines(bounds, 150, moduleSize, origin, limit));
+    } else if (type === "hex") {
+      hex = hexGrid(bounds, moduleSize, origin);
+      result.polygons = hex.polygons;
+      result.truncated = hex.truncated;
+    } else if (type === "golden") {
+      appendLineSet(result, parallelLines(bounds, 0, moduleSize, origin, limit));
+      appendLineSet(result, parallelLines(bounds, 90, moduleSize * PHI, origin, limit));
+    } else {
+      appendLineSet(result, parallelLines(bounds, 0, moduleSize, origin, limit));
+      appendLineSet(result, parallelLines(bounds, 90, moduleSize, origin, limit));
+    }
+    return result;
+  }
+  api.buildBackground = buildBackground;
 
   // ---- audit (tier 3 groundwork) --------------------------------------------
 
