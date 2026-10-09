@@ -334,6 +334,398 @@ Lattice.geometry = (function () {
   }
   api.hasHandle = hasHandle;
 
+  // ---- circles (tier 2) -------------------------------------------------------
+  //
+  // For each cubic long enough to be a real arc, sample the curve, fit a
+  // circle, and reject anything that is not actually that circle: collinear
+  // samples, radii outside the caller's range or the object's bounds, fits
+  // that miss the samples, and ghosts whose bezier wanders off the arc
+  // between the fit samples. Merging is two-pass — looser inside one path,
+  // tighter across paths — so a broken ellipse becomes one circle without
+  // gluing neighboring marks together.
+
+  function sampleCubic(p0, p1, p2, p3, segments) {
+    var pts = [];
+    var n = segments < 1 ? 1 : segments;
+    var i;
+    for (i = 0; i <= n; i++) {
+      pts.push(evalCubic(p0, p1, p2, p3, i / n));
+    }
+    return pts;
+  }
+  api.sampleCubic = sampleCubic;
+
+  function maxLineDeviation(points) {
+    var a = points[0];
+    var b = points[points.length - 1];
+    var maxDev = 0;
+    var i;
+    var d;
+    for (i = 1; i < points.length - 1; i++) {
+      d = pointToLineDistance(points[i], a, b);
+      if (d > maxDev) {
+        maxDev = d;
+      }
+    }
+    return maxDev;
+  }
+
+  // Algebraic circle fit (modified least squares) on an arbitrary point
+  // list. Returns null when the points are collinear or too few to define
+  // a circle — the determinant of the normal equations collapses.
+  function fitCircle(points) {
+    var n = points.length;
+    var meanX = 0;
+    var meanY = 0;
+    var i;
+    var u;
+    var v;
+    var Suu = 0;
+    var Suv = 0;
+    var Svv = 0;
+    var Suuu = 0;
+    var Suvv = 0;
+    var Svvv = 0;
+    var Svuu = 0;
+    var det;
+    var uc;
+    var vc;
+    var radius;
+
+    if (n < 3) {
+      return null;
+    }
+    for (i = 0; i < n; i++) {
+      meanX += points[i].x;
+      meanY += points[i].y;
+    }
+    meanX /= n;
+    meanY /= n;
+
+    for (i = 0; i < n; i++) {
+      u = points[i].x - meanX;
+      v = points[i].y - meanY;
+      Suu += u * u;
+      Svv += v * v;
+      Suv += u * v;
+      Suuu += u * u * u;
+      Svvv += v * v * v;
+      Suvv += u * v * v;
+      Svuu += v * u * u;
+    }
+
+    det = Suu * Svv - Suv * Suv;
+    if (Math.abs(det) < 1e-12 * (Suu + Svv) * (Suu + Svv) + 1e-18) {
+      return null;
+    }
+    uc = (0.5 * (Suuu + Suvv) * Svv - Suv * 0.5 * (Svvv + Svuu)) / det;
+    vc = (Suu * 0.5 * (Svvv + Svuu) - 0.5 * (Suuu + Suvv) * Suv) / det;
+    radius = Math.sqrt(uc * uc + vc * vc + (Suu + Svv) / n);
+    if (!(radius > 0) || radius !== radius) {
+      return null;
+    }
+    return {
+      center: { x: uc + meanX, y: vc + meanY },
+      radius: radius
+    };
+  }
+  api.fitCircle = fitCircle;
+
+  function boundsDiagonal(bounds) {
+    var w = Math.abs(bounds.right - bounds.left);
+    var h = Math.abs(bounds.bottom - bounds.top);
+    return Math.sqrt(w * w + h * h);
+  }
+
+  function circleIntersectsBounds(center, radius, bounds) {
+    var xMin = Math.min(bounds.left, bounds.right);
+    var xMax = Math.max(bounds.left, bounds.right);
+    var yMin = Math.min(bounds.top, bounds.bottom);
+    var yMax = Math.max(bounds.top, bounds.bottom);
+    var cx = center.x;
+    var cy = center.y;
+    if (cx < xMin) {
+      cx = xMin;
+    } else if (cx > xMax) {
+      cx = xMax;
+    }
+    if (cy < yMin) {
+      cy = yMin;
+    } else if (cy > yMax) {
+      cy = yMax;
+    }
+    return distance(center, { x: cx, y: cy }) <= radius + 1e-6;
+  }
+
+  // Sweep of the arc p0 → pmid → p3 as seen from center, in radians.
+  // The midpoint picks which way around the circle the bezier actually went,
+  // so a quarter-turn is not reported as the long way around.
+  function sweepAngle(center, p0, pmid, p3) {
+    function ang(p) {
+      return Math.atan2(p.y - center.y, p.x - center.x);
+    }
+    function ccw(from, to) {
+      var d = to - from;
+      while (d < 0) {
+        d += 2 * Math.PI;
+      }
+      while (d >= 2 * Math.PI) {
+        d -= 2 * Math.PI;
+      }
+      return d;
+    }
+    var a0 = ang(p0);
+    var am = ang(pmid);
+    var a3 = ang(p3);
+    var full = ccw(a0, a3);
+    if (ccw(a0, am) <= full) {
+      return full;
+    }
+    return 2 * Math.PI - full;
+  }
+
+  function fitCircleToCubic(cubic, options) {
+    var minRadius;
+    var minChord;
+    var tolerance;
+    var collinearEpsilon;
+    var maxRadiusFactor;
+    var chord;
+    var fitSamples;
+    var fit;
+    var radius;
+    var center;
+    var diag;
+    var dense;
+    var maxAbs;
+    var i;
+    var err;
+    var error;
+    var mid;
+    var sweep;
+
+    options = options || {};
+    minRadius = options.minRadius !== undefined ? options.minRadius : 8;
+    minChord = options.minChord !== undefined ? options.minChord : 15;
+    tolerance = options.tolerance !== undefined ? options.tolerance : 0.03;
+    collinearEpsilon = options.collinearEpsilon !== undefined ? options.collinearEpsilon : 0.25;
+    maxRadiusFactor = options.maxRadiusFactor !== undefined ? options.maxRadiusFactor : 4;
+
+    chord = distance(cubic.p0, cubic.p3);
+    if (!(chord >= minChord)) {
+      return null;
+    }
+
+    fitSamples = sampleCubic(cubic.p0, cubic.p1, cubic.p2, cubic.p3, 4);
+    if (maxLineDeviation(fitSamples) <= collinearEpsilon) {
+      return null;
+    }
+
+    fit = fitCircle(fitSamples);
+    if (!fit) {
+      return null;
+    }
+    radius = fit.radius;
+    center = fit.center;
+    if (!(radius >= minRadius) || radius > 1e6) {
+      return null;
+    }
+
+    if (options.bounds) {
+      diag = boundsDiagonal(options.bounds);
+      if (diag > 1 && radius > diag * maxRadiusFactor) {
+        return null;
+      }
+      if (diag > 1 && !circleIntersectsBounds(center, radius, options.bounds)) {
+        return null;
+      }
+    }
+
+    // Dense samples cover the fit knots (16 is a multiple of 4) and the
+    // spans between them. A ghost can thread the knots and still leave the arc.
+    dense = sampleCubic(cubic.p0, cubic.p1, cubic.p2, cubic.p3, 16);
+    maxAbs = 0;
+    for (i = 0; i < dense.length; i++) {
+      err = Math.abs(distance(dense[i], center) - radius);
+      if (err > maxAbs) {
+        maxAbs = err;
+      }
+    }
+    error = maxAbs / radius;
+    if (error > tolerance) {
+      return null;
+    }
+
+    mid = evalCubic(cubic.p0, cubic.p1, cubic.p2, cubic.p3, 0.5);
+    sweep = sweepAngle(center, cubic.p0, mid, cubic.p3);
+    return {
+      center: { x: center.x, y: center.y },
+      radius: radius,
+      error: error,
+      arcLength: radius * sweep,
+      chord: chord
+    };
+  }
+  api.fitCircleToCubic = fitCircleToCubic;
+
+  // relTolerance is a fraction of the larger radius: 0.03 means centers and
+  // radii must agree within 3%. Greedy, same shape as the other mergers —
+  // logo arc counts stay in the dozens.
+  function mergeCircles(circles, relTolerance) {
+    var groups = [];
+    var i;
+    var j;
+    var c;
+    var g;
+    var matched;
+    var rMax;
+    var w;
+    var W;
+
+    for (i = 0; i < circles.length; i++) {
+      c = circles[i];
+      matched = null;
+      for (j = 0; j < groups.length; j++) {
+        g = groups[j];
+        rMax = g.radius > c.radius ? g.radius : c.radius;
+        if (!(rMax > 0)) {
+          continue;
+        }
+        if (
+          Math.abs(g.radius - c.radius) <= relTolerance * rMax &&
+          distance(g.center, c.center) <= relTolerance * rMax
+        ) {
+          matched = g;
+          break;
+        }
+      }
+      if (matched) {
+        w = c.arcLength > 0 ? c.arcLength : 1;
+        W = matched.weight;
+        matched.center = {
+          x: (matched.center.x * W + c.center.x * w) / (W + w),
+          y: (matched.center.y * W + c.center.y * w) / (W + w)
+        };
+        matched.radius = (matched.radius * W + c.radius * w) / (W + w);
+        if (c.error > matched.error) {
+          matched.error = c.error;
+        }
+        matched.arcLength += c.arcLength > 0 ? c.arcLength : 0;
+        if ((c.chord || 0) > matched.chord) {
+          matched.chord = c.chord;
+        }
+        matched.weight = W + w;
+        matched.members += 1;
+      } else {
+        w = c.arcLength > 0 ? c.arcLength : 1;
+        groups.push({
+          center: { x: c.center.x, y: c.center.y },
+          radius: c.radius,
+          error: c.error || 0,
+          arcLength: c.arcLength > 0 ? c.arcLength : 0,
+          chord: c.chord || 0,
+          weight: w,
+          members: 1
+        });
+      }
+    }
+    return groups;
+  }
+  api.mergeCircles = mergeCircles;
+
+  // paths: [{ bounds: {left,top,right,bottom}, cubics: [{p0,p1,p2,p3}] }]
+  // In-path merge uses `tolerance`. The cross-path pass multiplies it by
+  // `crossPathFactor` (default 0.5) so identical arcs on separate paths
+  // still join, while near-misses that would merge inside one path do not.
+  function fitCircles(paths, options) {
+    var tolerance;
+    var cross;
+    var perPath = [];
+    var p;
+    var i;
+    var fitted;
+    var cubics;
+    var fitOpts;
+    var found;
+    var merged;
+
+    options = options || {};
+    tolerance = options.tolerance !== undefined ? options.tolerance : 0.03;
+    cross = options.crossPathFactor !== undefined ? options.crossPathFactor : 0.5;
+
+    for (p = 0; p < paths.length; p++) {
+      fitted = [];
+      cubics = paths[p].cubics || [];
+      fitOpts = {
+        minRadius: options.minRadius,
+        minChord: options.minChord,
+        tolerance: tolerance,
+        maxRadiusFactor: options.maxRadiusFactor,
+        collinearEpsilon: options.collinearEpsilon,
+        bounds: paths[p].bounds
+      };
+      for (i = 0; i < cubics.length; i++) {
+        found = fitCircleToCubic(cubics[i], fitOpts);
+        if (found) {
+          fitted.push(found);
+        }
+      }
+      merged = mergeCircles(fitted, tolerance);
+      for (i = 0; i < merged.length; i++) {
+        perPath.push(merged[i]);
+      }
+    }
+    return mergeCircles(perPath, tolerance * cross);
+  }
+  api.fitCircles = fitCircles;
+
+  // display.mode: "all" | "longest" | "error"
+  // longest keeps the `count` arcs with the greatest arc length.
+  // error keeps circles whose max radial error is <= maxError (a fraction).
+  function filterCircles(circles, display) {
+    var mode;
+    var out = [];
+    var copy;
+    var i;
+    var n;
+
+    display = display || {};
+    mode = display.mode || "all";
+    if (mode === "error") {
+      for (i = 0; i < circles.length; i++) {
+        if (circles[i].error <= display.maxError) {
+          out.push(circles[i]);
+        }
+      }
+      return out;
+    }
+    if (mode === "longest") {
+      copy = circles.slice(0);
+      copy.sort(function (a, b) {
+        if (a.arcLength === b.arcLength) {
+          return a.error - b.error;
+        }
+        return b.arcLength - a.arcLength;
+      });
+      n = display.count;
+      if (!(n >= 0)) {
+        n = copy.length;
+      }
+      if (n > copy.length) {
+        n = copy.length;
+      }
+      for (i = 0; i < n; i++) {
+        out.push(copy[i]);
+      }
+      return out;
+    }
+    for (i = 0; i < circles.length; i++) {
+      out.push(circles[i]);
+    }
+    return out;
+  }
+  api.filterCircles = filterCircles;
+
   // ---- audit (tier 3 groundwork) --------------------------------------------
 
   // Two anchors are a likely accident (not an intentional coincident point)

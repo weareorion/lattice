@@ -5,10 +5,9 @@
 // or:
 //   npm test
 //
-// Covers the tier-1 engine functions that are implemented so far. Circle
-// fitting / ghost rejection (tier 2) and diagonal alignment grouping are
-// not implemented yet and are intentionally not tested here — see the
-// `circles` and `gridlines-angles` todos in the plan.
+// Covers the tier-1 engine plus tier-2 circles (fit, ghost rejection,
+// in-path then cross-path merge). Diagonal alignment grouping is still
+// not implemented — see the `gridlines-angles` todo.
 
 var assert = require("assert");
 var geometry = require("../host/geometry.jsx");
@@ -192,6 +191,182 @@ test("extendSegmentToBounds accepts Illustrator bounds where top > bottom", func
   approxEqual(points[0].y, 0);
   approxEqual(points[1].x, 30);
   approxEqual(points[1].y, 100);
+});
+
+// A cubic quarter-circle using the standard kappa handle length.
+function circleCubic(cx, cy, r, a0, a1) {
+  var handle = ((4 / 3) * Math.tan((a1 - a0) / 4)) * r;
+  function pt(a) {
+    return { x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) };
+  }
+  var p0 = pt(a0);
+  var p3 = pt(a1);
+  return {
+    p0: p0,
+    p1: { x: p0.x - Math.sin(a0) * handle, y: p0.y + Math.cos(a0) * handle },
+    p2: { x: p3.x + Math.sin(a1) * handle, y: p3.y - Math.cos(a1) * handle },
+    p3: p3
+  };
+}
+
+var CIRCLE_OPTS = {
+  minRadius: 8,
+  minChord: 15,
+  tolerance: 0.03
+};
+
+test("fitCircle recovers center and radius from exact samples", function () {
+  var fit = geometry.fitCircle([
+    { x: 1, y: 0 },
+    { x: 0, y: 1 },
+    { x: -1, y: 0 },
+    { x: 0, y: -1 }
+  ]);
+  approxEqual(fit.center.x, 0);
+  approxEqual(fit.center.y, 0);
+  approxEqual(fit.radius, 1);
+});
+
+test("fitCircleToCubic fits a quarter-circle cubic", function () {
+  var cubic = circleCubic(0, 0, 100, 0, Math.PI / 2);
+  var fit = geometry.fitCircleToCubic(cubic, CIRCLE_OPTS);
+  assert.ok(fit, "expected a circle");
+  approxEqual(fit.center.x, 0, 0.2);
+  approxEqual(fit.center.y, 0, 0.2);
+  approxEqual(fit.radius, 100, 0.2);
+  approxEqual(fit.arcLength, 100 * (Math.PI / 2), 1);
+  assert.ok(fit.error < 0.01, "kappa arc should hug the circle, error was " + fit.error);
+});
+
+test("fitCircleToCubic rejects collinear samples", function () {
+  var straight = {
+    p0: { x: 0, y: 0 },
+    p1: { x: 40, y: 0 },
+    p2: { x: 80, y: 0 },
+    p3: { x: 120, y: 0 }
+  };
+  assert.strictEqual(geometry.fitCircleToCubic(straight, CIRCLE_OPTS), null);
+});
+
+test("fitCircleToCubic rejects a chord shorter than the minimum", function () {
+  var tiny = circleCubic(0, 0, 100, 0, 0.05);
+  assert.strictEqual(geometry.fitCircleToCubic(tiny, CIRCLE_OPTS), null);
+});
+
+test("fitCircleToCubic rejects radii below the minimum", function () {
+  var small = circleCubic(0, 0, 5, 0, Math.PI / 2);
+  assert.strictEqual(
+    geometry.fitCircleToCubic(small, { minRadius: 8, minChord: 1, tolerance: 0.03 }),
+    null
+  );
+});
+
+test("fitCircleToCubic rejects an out-of-bounds radius", function () {
+  // Gentle arc: truly circular, long enough, but the radius dwarfs the object.
+  var arc = circleCubic(0, 0, 400, 0, 0.2);
+  var fit = geometry.fitCircleToCubic(arc, {
+    minRadius: 8,
+    minChord: 15,
+    tolerance: 0.03,
+    bounds: { left: 390, top: 85, right: 405, bottom: -1 }
+  });
+  assert.strictEqual(fit, null);
+});
+
+test("fitCircleToCubic rejects a circle outside the object's bounding box", function () {
+  var cubic = circleCubic(0, 0, 100, 0, Math.PI / 2);
+  var fit = geometry.fitCircleToCubic(cubic, {
+    minRadius: 8,
+    minChord: 15,
+    tolerance: 0.03,
+    bounds: { left: 5000, top: 5200, right: 5200, bottom: 5000 }
+  });
+  assert.strictEqual(fit, null);
+});
+
+test("fitCircleToCubic rejects a ghost whose curve does not hug the fitted arc", function () {
+  var ghost = circleCubic(0, 0, 100, 0, Math.PI / 2);
+  ghost.p1 = { x: ghost.p1.x, y: ghost.p1.y + 80 };
+  ghost.p2 = { x: ghost.p2.x + 80, y: ghost.p2.y };
+  assert.strictEqual(geometry.fitCircleToCubic(ghost, CIRCLE_OPTS), null);
+});
+
+test("fitCircleToCubic rejects a curve that does not pass through a circle", function () {
+  var sCurve = {
+    p0: { x: 0, y: 0 },
+    p1: { x: 20, y: 80 },
+    p2: { x: 80, y: -80 },
+    p3: { x: 100, y: 0 }
+  };
+  assert.strictEqual(geometry.fitCircleToCubic(sCurve, CIRCLE_OPTS), null);
+});
+
+test("mergeCircles joins circles within a relative tolerance and keeps the rest apart", function () {
+  var a = { center: { x: 0, y: 0 }, radius: 100, error: 0.001, arcLength: 10, chord: 10 };
+  var b = { center: { x: 3, y: 0 }, radius: 100, error: 0.001, arcLength: 10, chord: 10 };
+  var different = { center: { x: 0, y: 0 }, radius: 110, error: 0.001, arcLength: 10, chord: 10 };
+  assert.strictEqual(geometry.mergeCircles([a, b], 0.04).length, 1);
+  assert.strictEqual(geometry.mergeCircles([a, b], 0.02).length, 2);
+  assert.strictEqual(geometry.mergeCircles([a, different], 0.04).length, 2);
+  assert.strictEqual(geometry.mergeCircles([a, different], 0.1).length, 1);
+});
+
+test("fitCircles merges inside a path, then across paths with a tighter tolerance", function () {
+  var big = { left: -200, top: 250, right: 250, bottom: -50 };
+  var originA = circleCubic(0, 0, 100, 0, Math.PI / 2);
+  var originB = circleCubic(0, 0, 100, Math.PI / 2, Math.PI);
+  var originC = circleCubic(0, 0, 100, Math.PI, Math.PI * 1.5);
+  var offset = circleCubic(3, 0, 100, 0, Math.PI / 2);
+  var opts = { minRadius: 8, minChord: 15, tolerance: 0.04, crossPathFactor: 0.5 };
+
+  var sameCircle = geometry.fitCircles(
+    [
+      { bounds: big, cubics: [originA, originB] },
+      { bounds: big, cubics: [originC] }
+    ],
+    opts
+  );
+  assert.strictEqual(sameCircle.length, 1);
+  approxEqual(sameCircle[0].center.x, 0, 0.5);
+  approxEqual(sameCircle[0].center.y, 0, 0.5);
+  approxEqual(sameCircle[0].radius, 100, 0.5);
+  assert.ok(sameCircle[0].members >= 2);
+  approxEqual(sameCircle[0].arcLength, 100 * Math.PI * 1.5, 5);
+
+  // 3% of the radius: inside the in-path tolerance (4%), outside the
+  // cross-path tolerance (2%).
+  var inPath = geometry.fitCircles([{ bounds: big, cubics: [originA, offset] }], opts);
+  assert.strictEqual(inPath.length, 1);
+
+  var crossPath = geometry.fitCircles(
+    [
+      { bounds: big, cubics: [originA] },
+      { bounds: big, cubics: [offset] }
+    ],
+    opts
+  );
+  assert.strictEqual(crossPath.length, 2);
+  crossPath.sort(function (a, b) {
+    return a.center.x - b.center.x;
+  });
+  approxEqual(crossPath[0].center.x, 0, 0.5);
+  approxEqual(crossPath[1].center.x, 3, 0.5);
+  assert.strictEqual(crossPath[1].members, 1);
+});
+
+test("filterCircles keeps every circle, the N longest arcs, or those under an error", function () {
+  var circles = [
+    { center: { x: 0, y: 0 }, radius: 10, error: 0.02, arcLength: 5 },
+    { center: { x: 0, y: 0 }, radius: 30, error: 0.005, arcLength: 40 },
+    { center: { x: 0, y: 0 }, radius: 20, error: 0.01, arcLength: 12 }
+  ];
+  assert.strictEqual(geometry.filterCircles(circles, { mode: "all" }).length, 3);
+  var longest = geometry.filterCircles(circles, { mode: "longest", count: 2 });
+  assert.strictEqual(longest.length, 2);
+  assert.strictEqual(longest[0].arcLength, 40);
+  assert.strictEqual(longest[1].arcLength, 12);
+  var under = geometry.filterCircles(circles, { mode: "error", maxError: 0.01 });
+  assert.strictEqual(under.length, 2);
 });
 
 test("nearDuplicateAnchors flags two anchors closer than tolerance but not identical", function () {
