@@ -181,6 +181,19 @@ test("hasHandle rejects a zero-length handle and accepts a real one", function (
   assert.ok(geometry.hasHandle(anchor, { x: 15, y: 10 }));
 });
 
+test("extendSegmentToBounds accepts Illustrator bounds where top > bottom", function () {
+  var bounds = { left: 0, top: 100, right: 100, bottom: 0 };
+  var extended = geometry.extendSegmentToBounds({ x: 30, y: 40 }, { x: 30, y: 60 }, bounds);
+  var points = [extended.p1, extended.p2];
+  points.sort(function (p, q) {
+    return p.y - q.y;
+  });
+  approxEqual(points[0].x, 30);
+  approxEqual(points[0].y, 0);
+  approxEqual(points[1].x, 30);
+  approxEqual(points[1].y, 100);
+});
+
 test("nearDuplicateAnchors flags two anchors closer than tolerance but not identical", function () {
   var a = { x: 0, y: 0 };
   assert.ok(!geometry.nearDuplicateAnchors(a, { x: 0, y: 0 }, 1)); // identical: not a "near" duplicate, it IS one

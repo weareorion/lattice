@@ -127,15 +127,18 @@ Lattice.geometry = (function () {
       candidates.push({ t: tBottom, x: a.x + tBottom * dx, y: bounds.bottom });
     }
 
+    // Accept either y-up bounds (Illustrator: top > bottom) or y-down
+    // bounds (tests historically used top < bottom). The rectangle is the
+    // same; only the validity window needs both orders.
+    var xMin = Math.min(bounds.left, bounds.right) - eps;
+    var xMax = Math.max(bounds.left, bounds.right) + eps;
+    var yMin = Math.min(bounds.top, bounds.bottom) - eps;
+    var yMax = Math.max(bounds.top, bounds.bottom) + eps;
+
     valid = [];
     for (i = 0; i < candidates.length; i++) {
       c = candidates[i];
-      if (
-        c.x >= bounds.left - eps &&
-        c.x <= bounds.right + eps &&
-        c.y >= bounds.top - eps &&
-        c.y <= bounds.bottom + eps
-      ) {
+      if (c.x >= xMin && c.x <= xMax && c.y >= yMin && c.y <= yMax) {
         valid.push(c);
       }
     }
