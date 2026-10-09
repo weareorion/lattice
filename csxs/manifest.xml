@@ -44,11 +44,11 @@
           <Menu>Lattice</Menu>
           <Geometry>
             <Size>
-              <Height>640</Height>
+              <Height>860</Height>
               <Width>320</Width>
             </Size>
             <MinSize>
-              <Height>420</Height>
+              <Height>480</Height>
               <Width>280</Width>
             </MinSize>
           </Geometry>

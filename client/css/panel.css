@@ -4,6 +4,11 @@
   box-sizing: border-box;
 }
 
+html,
+body {
+  height: 100%;
+}
+
 body {
   margin: 0;
   padding: 12px;
@@ -11,6 +16,7 @@ body {
   font-size: 12px;
   background: #2b2b2b;
   color: #d8d8d8;
+  overflow-y: auto;
 }
 
 header h1 {
@@ -40,6 +46,7 @@ legend {
 .row {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
   margin: 4px 0;
 }
@@ -61,6 +68,12 @@ legend {
   flex: 1;
 }
 
+.hint {
+  margin: 2px 0 6px;
+  color: #9a9a9a;
+  line-height: 1.35;
+}
+
 input,
 select,
 button {
@@ -74,13 +87,14 @@ button {
 
 .actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   margin: 10px 0;
 }
 
 button {
-  flex: 1;
-  padding: 6px 0;
+  flex: 1 1 30%;
+  padding: 6px 4px;
   cursor: pointer;
 }
 

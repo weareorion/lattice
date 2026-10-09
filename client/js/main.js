@@ -7,10 +7,64 @@
   "use strict";
 
   var csInterface = new CSInterface();
+  var STORAGE_KEY = "lattice.options.v1";
 
   var statusEl = document.getElementById("status");
   var reportEl = document.getElementById("report");
   var reportBodyEl = document.getElementById("report-body");
+
+  function persistOptions() {
+    var data = {};
+    var inputs = document.querySelectorAll("#options-form input, #options-form select");
+    var i;
+    var el;
+    for (i = 0; i < inputs.length; i++) {
+      el = inputs[i];
+      if (!el.id) {
+        continue;
+      }
+      data[el.id] = el.type === "checkbox" ? el.checked : el.value;
+    }
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    } catch (err) {
+      // CEP can deny storage; the panel still works for this session.
+    }
+  }
+
+  function restoreOptions() {
+    var raw;
+    var data;
+    var id;
+    var el;
+    try {
+      raw = localStorage.getItem(STORAGE_KEY);
+    } catch (err) {
+      return;
+    }
+    if (!raw) {
+      return;
+    }
+    try {
+      data = JSON.parse(raw);
+    } catch (err) {
+      return;
+    }
+    for (id in data) {
+      if (!Object.prototype.hasOwnProperty.call(data, id)) {
+        continue;
+      }
+      el = document.getElementById(id);
+      if (!el) {
+        continue;
+      }
+      if (el.type === "checkbox") {
+        el.checked = !!data[id];
+      } else {
+        el.value = data[id];
+      }
+    }
+  }
 
   function setStatus(message, kind) {
     statusEl.textContent = message || "";
@@ -39,7 +93,9 @@
         handles: { enabled: checked("layer-handles"), color: value("color-handles"), size: number("size-handles") },
         outline: { enabled: checked("layer-outline"), color: value("color-outline") },
         alignments: { enabled: checked("layer-alignments"), color: value("color-alignments") },
-        edges: { enabled: checked("layer-edges"), color: value("color-edges") }
+        edges: { enabled: checked("layer-edges"), color: value("color-edges") },
+        circles: { enabled: checked("layer-circles"), color: value("color-circles") },
+        background: { enabled: checked("layer-background"), color: value("color-background") }
       },
       lineWeight: number("line-weight"),
       sensitivity: {
@@ -51,6 +107,22 @@
       scope: {
         mode: value("scope-mode"), // "artboard" | "selection"
         margin: number("scope-margin")
+      },
+      circles: {
+        minRadius: number("circle-min-radius"),
+        minChord: number("circle-min-chord"),
+        tolerance: number("circle-tolerance") / 100,
+        display: {
+          mode: value("circle-display"), // "all" | "longest" | "error"
+          count: number("circle-longest-n"),
+          maxError: number("circle-max-error") / 100
+        }
+      },
+      background: {
+        type: value("background-type") // "square" | "isometric" | "hex" | "golden"
+      },
+      guides: {
+        alignments: checked("alignments-as-guides")
       }
     };
   }
@@ -89,12 +161,34 @@
   }
 
   function onGenerateResult(result) {
+    var parts;
     if (!result || result.ok === false) {
       setStatus((result && result.error) || "Generate failed.", "error");
       return;
     }
-    setStatus("Generated " + (result.drawn ? result.drawn + " elements." : "."), "ok");
+    parts = ["Generated " + result.drawn + " elements"];
+    if (result.circles && result.circles.length) {
+      parts.push(result.circles.length + (result.circles.length === 1 ? " circle" : " circles"));
+    }
+    if (result.guides) {
+      parts.push(result.guides + (result.guides === 1 ? " guide" : " guides"));
+    }
+    if (typeof result.module === "number") {
+      parts.push("module " + result.module.toFixed(2) + " pt");
+    }
+    if (result.backgroundTruncated) {
+      parts.push("background grid capped");
+    }
+    setStatus(parts.join(" · ") + ".", "ok");
     showReport(result);
+  }
+
+  function onUpdateResult(result) {
+    if (!result || result.ok === false) {
+      setStatus((result && result.error) || "Update failed.", "error");
+      return;
+    }
+    setStatus("Updated style on " + result.updated + " elements.", "ok");
   }
 
   function onClearResult(result) {
@@ -108,8 +202,19 @@
 
   document.getElementById("btn-generate").addEventListener("click", function () {
     setStatus("Generating…");
+    persistOptions();
     var options = readOptions();
     callHost("Lattice.main.generate(" + JSON.stringify(JSON.stringify(options)) + ");", onGenerateResult);
+  });
+
+  document.getElementById("btn-update").addEventListener("click", function () {
+    setStatus("Updating style…");
+    persistOptions();
+    var options = readOptions();
+    callHost(
+      "Lattice.main.updateAppearance(" + JSON.stringify(JSON.stringify(options)) + ");",
+      onUpdateResult
+    );
   });
 
   document.getElementById("btn-clear").addEventListener("click", function () {
@@ -117,5 +222,8 @@
     callHost("Lattice.main.clear();", onClearResult);
   });
 
+  document.getElementById("options-form").addEventListener("change", persistOptions);
+
+  restoreOptions();
   setStatus("Select a logo in Illustrator, then click Generate.");
 })();

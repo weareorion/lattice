@@ -50,6 +50,18 @@
       </label>
 
       <label class="row">
+        <input type="checkbox" id="layer-circles" checked />
+        Circles
+        <input type="color" id="color-circles" value="#ff9500" title="Circle color" />
+      </label>
+
+      <label class="row">
+        <input type="checkbox" id="layer-background" />
+        Background
+        <input type="color" id="color-background" value="#8e8e93" title="Background color" />
+      </label>
+
+      <label class="row">
         Line weight
         <input type="number" id="line-weight" min="0.25" max="10" step="0.25" value="0.5" />
       </label>
@@ -94,10 +106,73 @@
         <input type="number" id="scope-margin" min="0" max="500" step="1" value="40" />
       </label>
     </fieldset>
+
+    <fieldset>
+      <legend>Circles</legend>
+      <p class="hint">Radius and chord are in points. Tolerance and max error are a percent of the radius.</p>
+
+      <label class="row">
+        Minimum radius
+        <input type="number" id="circle-min-radius" min="0" max="2000" step="1" value="8" title="Ignore circles smaller than this" />
+      </label>
+
+      <label class="row">
+        Minimum chord
+        <input type="number" id="circle-min-chord" min="0" max="2000" step="1" value="15" title="Ignore curves shorter than this" />
+      </label>
+
+      <label class="row">
+        Tolerance (%)
+        <input type="number" id="circle-tolerance" min="0.1" max="20" step="0.1" value="3" title="How far a curve may stray from the fitted circle" />
+      </label>
+
+      <label class="row">
+        Display
+        <select id="circle-display" title="Which fitted circles to draw">
+          <option value="all" selected>All circles</option>
+          <option value="longest">N longest</option>
+          <option value="error">Under error threshold</option>
+        </select>
+      </label>
+
+      <label class="row">
+        Longest count
+        <input type="number" id="circle-longest-n" min="1" max="100" step="1" value="5" title="How many arcs to keep in N longest mode" />
+      </label>
+
+      <label class="row">
+        Max error (%)
+        <input type="number" id="circle-max-error" min="0.1" max="20" step="0.1" value="1" title="Draw only circles at or under this error" />
+      </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Background</legend>
+      <p class="hint">Scaled to a module measured from the mark. Generate to rebuild after changing the type.</p>
+
+      <label class="row">
+        <select id="background-type" title="Background grid type">
+          <option value="square" selected>Square</option>
+          <option value="isometric">Isometric</option>
+          <option value="hex">Hex</option>
+          <option value="golden">Golden ratio</option>
+        </select>
+      </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Guides</legend>
+      <label class="row">
+        <input type="checkbox" id="alignments-as-guides" />
+        Alignment lines as guides
+      </label>
+      <p class="hint">Guides use Illustrator's guide color and live on the Lattice layer. Clear removes them. Update style does not create or remove guides.</p>
+    </fieldset>
   </form>
 
   <div class="actions">
     <button id="btn-generate" type="button">Generate</button>
+    <button id="btn-update" type="button" class="secondary" title="Recolor and resize the current grid without refitting">Update style</button>
     <button id="btn-clear" type="button" class="secondary">Clear</button>
   </div>
 
